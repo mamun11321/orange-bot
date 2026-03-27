@@ -83,9 +83,6 @@ const sendAudioToTelegramGroup = async (caption, filePath) => {
     }
 };
 
-// ============================================
-// পপ-আপ ক্লোজ ফাংশন
-// ============================================
 const closePopups = async (page) => {
     const popupTexts = ['Next', 'Done', 'Close', 'Skip', 'Got it'];
     for (const text of popupTexts) {
@@ -96,14 +93,12 @@ const closePopups = async (page) => {
                 logger.info(`✅ Closed popup: ${text}`);
                 await new Promise(r => setTimeout(r, 1000));
             }
-        } catch (e) {
-            // ignore
-        }
+        } catch (e) {}
     }
 };
 
 // ============================================
-// লগইন ফাংশন
+// লগইন ফাংশন - সঠিক URL সহ
 // ============================================
 const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
     let browser = null;
@@ -145,30 +140,20 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
             
-            await page.setExtraHTTPHeaders({
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Connection': 'keep-alive'
-            });
-            
             page.setDefaultTimeout(90000);
             
-            // Enable network logging
-            await page.setRequestInterception(true);
+            // ✅ সঠিক URL - orangecarrier.com (দুটি 'r')
+            const LOGIN_URL = "https://www.orangecarrier.com/login";
+            const LIVE_CALLS_URL = "https://www.orangecarrier.com/live/calls";
             
-            page.on('request', request => {
-                const url = request.url();
-                if (url.includes('.mp3') || url.includes('sound') || url.includes('audio')) {
-                    logger.info(`🎵 Audio request detected: ${url.substring(0, 100)}`);
-                }
-                request.continue();
-            });
-            
-            logger.info("🌐 Opening login page...");
-            await page.goto("https://www.orangecarrier.com/login", {
+            logger.info(`🌐 Opening login page: ${LOGIN_URL}`);
+            await page.goto(LOGIN_URL, {
                 waitUntil: "networkidle2",
                 timeout: 60000,
             });
+            
+            // Screenshot for debugging
+            await page.screenshot({ path: 'login-page.png' }).catch(() => {});
             
             await page.waitForSelector('input[type="email"], input[name="email"]', { timeout: 30000 });
             await new Promise(r => setTimeout(r, 2000));
@@ -179,9 +164,8 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
             if (!emailField) {
                 const inputs = await page.$$('input');
                 for (const input of inputs) {
-                    const type = await input.evaluate(el => el.type);
                     const name = await input.evaluate(el => el.name);
-                    if ((type === 'text' || type === 'email') && name === 'email') {
+                    if (name === 'email') {
                         emailField = input;
                         break;
                     }
@@ -196,26 +180,27 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
             
             logger.info("✅ Email & Password fields detected!");
             
-            // Clear and type email
+            // Type email
             await emailField.click({ clickCount: 3 });
             await emailField.press('Backspace');
-            logger.info("✍️ Typing username (human-like)...");
+            logger.info("✍️ Typing username...");
             for (const char of USERNAME) {
-                await emailField.type(char, { delay: Math.random() * 150 + 100 });
+                await emailField.type(char, { delay: Math.random() * 100 + 80 });
             }
             
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 800));
             
-            // Clear and type password
+            // Type password
             await passField.click({ clickCount: 3 });
             await passField.press('Backspace');
-            logger.info("✍️ Typing password (human-like)...");
+            logger.info("✍️ Typing password...");
             for (const char of PASSWORD) {
-                await passField.type(char, { delay: Math.random() * 150 + 100 });
+                await passField.type(char, { delay: Math.random() * 100 + 80 });
             }
             
             await new Promise(r => setTimeout(r, 1000));
             
+            // Click login button
             let loginBtn = await page.$('button[type="submit"]');
             if (!loginBtn) loginBtn = await page.$('input[type="submit"]');
             
@@ -223,35 +208,57 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                 logger.info("👉 Clicking Sign In button...");
                 await loginBtn.click();
             } else {
-                logger.info("⏎ Pressing Enter key...");
+                logger.info("⏎ Pressing Enter...");
                 await passField.press('Enter');
             }
             
-            logger.info("⏳ Waiting for login to complete...");
-            await new Promise(r => setTimeout(r, 10000));
+            // Wait for redirect
+            logger.info("⏳ Waiting for redirect...");
+            await new Promise(r => setTimeout(r, 8000));
             
-            logger.info("🌐 Navigating to live calls page...");
-            await page.goto('https://www.orangecarrier.com/live/calls', {
-                waitUntil: 'networkidle2',
-                timeout: 30000
-            });
+            // Check current URL
+            const currentUrl = page.url();
+            logger.info(`📍 Current URL after login: ${currentUrl}`);
             
+            // Check if login successful (URL should not be /login)
+            if (currentUrl.includes('/login')) {
+                // Still on login page - check for error
+                const pageContent = await page.content();
+                if (pageContent.includes('invalid') || pageContent.includes('incorrect')) {
+                    logger.error("❌ Invalid credentials!");
+                } else {
+                    logger.error("❌ Login failed - still on login page");
+                }
+                throw new Error("Login failed - still on login page");
+            }
+            
+            // Navigate to live calls
+            logger.info("🌐 Navigating to live calls...");
+            await page.goto(LIVE_CALLS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
             await new Promise(r => setTimeout(r, 3000));
             
-            logger.info("🔍 Checking for popups...");
             await closePopups(page);
             
-            const currentUrl = page.url();
-            logger.info(`📍 Current URL: ${currentUrl}`);
+            const finalUrl = page.url();
+            logger.info(`📍 Final URL: ${finalUrl}`);
             
-            if (currentUrl.includes('live/calls') || currentUrl.includes('dashboard')) {
-                logger.info("🎉 Login successful! Dashboard detected.");
+            if (finalUrl.includes('live/calls')) {
+                logger.info("🎉 Login successful! On live calls page.");
                 const cookies = await page.cookies();
                 logger.info(`🍪 Got ${cookies.length} cookies`);
+                
+                // Send start message
+                const startMsg = `✅ Orange Carrier Bot Started!\n🕒 Time: ${new Date().toLocaleString()}\n🍪 Cookies: ${cookies.length}\n📡 Monitoring live calls...`;
+                axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    chat_id: CHAT_ID,
+                    text: startMsg,
+                    parse_mode: 'HTML'
+                }).catch(e => logger.error(`Telegram: ${e.message}`));
+                
                 return { browser, page, cookies };
             }
             
-            throw new Error("Login failed - not on live calls page");
+            throw new Error(`Login failed - unexpected URL: ${finalUrl}`);
             
         } catch (err) {
             attempt++;
@@ -266,9 +273,6 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
     return null;
 };
 
-// ============================================
-// কল প্রসেসিং ফাংশন
-// ============================================
 const processCallWorker = async (callData, cookies, page) => {
     const { country, number, cliNumber, audioUrl } = callData;
 
@@ -320,9 +324,6 @@ const processCallWorker = async (callData, cookies, page) => {
     }
 };
 
-// ============================================
-// মেইন ফাংশন (Frame Detach Error ফিক্স সহ)
-// ============================================
 const main = async () => {
     let browser = null;
     let currentPage = null;
@@ -343,32 +344,26 @@ const main = async () => {
             const processedCalls = new Set();
             logger.info("\n🚀 Monitoring started...");
 
-            // Refresh interval with error handling
             const refreshInterval = setInterval(async () => {
                 if (!currentPage || currentPage.isClosed()) {
-                    logger.warn("⚠️ Page is closed, attempting to reconnect...");
+                    logger.warn("⚠️ Page is closed, reconnecting...");
                     clearInterval(refreshInterval);
                     await reconnect();
                     return;
                 }
                 
                 try {
-                    logger.info(`🕒 ${REFRESH_INTERVAL_MINUTES} minutes passed. Refreshing page...`);
+                    logger.info(`🕒 ${REFRESH_INTERVAL_MINUTES} minutes passed. Refreshing...`);
                     await currentPage.reload({ waitUntil: 'networkidle2', timeout: 30000 });
                     await closePopups(currentPage);
-                    logger.info("✅ Page refreshed successfully.");
+                    logger.info("✅ Page refreshed.");
                 } catch (e) {
-                    if (e.message.includes('detached Frame') || e.message.includes('closed')) {
-                        logger.error(`🔴 Page error: ${e.message}`);
-                        clearInterval(refreshInterval);
-                        await reconnect();
-                    } else {
-                        logger.error(`🔴 Page refresh failed: ${e.message}`);
-                    }
+                    logger.error(`🔴 Refresh failed: ${e.message}`);
+                    clearInterval(refreshInterval);
+                    await reconnect();
                 }
             }, REFRESH_INTERVAL_MINUTES * 60 * 1000);
 
-            // Main monitoring loop
             while (true) {
                 try {
                     if (!currentPage || currentPage.isClosed()) {
@@ -378,7 +373,6 @@ const main = async () => {
                     const pageHtml = await currentPage.content();
                     const $ = cheerio.load(pageHtml);
 
-                    // Find table rows
                     const rows = $('#LiveCalls tr, #last-activity tbody.lastdata tr, table tbody tr');
                     
                     for (let i = 0; i < rows.length; i++) {
@@ -390,18 +384,15 @@ const main = async () => {
                             if (cliNumber && /^\d+$/.test(cliNumber) && !processedCalls.has(cliNumber)) {
                                 processedCalls.add(cliNumber);
                                 
-                                // Send Telegram notification
-                                const msg = `📞 <b>New Call Detected:</b>\n🔢 Number: <code>${cliNumber}</code>\n⏳ Playing audio in 20 seconds...`;
-                                const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-                                axios.post(url, {
+                                const msg = `📞 <b>New Call Detected!</b>\n🔢 Number: <code>${cliNumber}</code>\n⏳ Playing in 20 seconds...`;
+                                axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                                     chat_id: CHAT_ID,
                                     text: msg,
                                     parse_mode: 'HTML'
                                 }).catch(() => {});
                                 
-                                logger.info(`📞 New call detected (${cliNumber}), scheduling playback after 20s...`);
+                                logger.info(`📞 New call: ${cliNumber}`);
                                 
-                                // Find and click play button
                                 const playButton = $(row).find("button[onclick*='Play']");
                                 if (playButton.length) {
                                     const onclickAttr = playButton.attr('onclick');
@@ -416,12 +407,11 @@ const main = async () => {
                                             audioUrl: `https://www.orangecarrier.com/live/calls/sound?did=${did}&uuid=${uuid}`
                                         };
                                         
-                                        // Capture cookies at call time
                                         const currentCookies = await currentPage.cookies();
                                         
                                         setTimeout(() => {
                                             processCallWorker(callData, currentCookies, currentPage)
-                                                .catch(err => logger.error(`❌ Call processing failed: ${err.message}`));
+                                                .catch(err => logger.error(`❌ Call failed: ${err.message}`));
                                         }, 20000);
                                     }
                                 }
@@ -430,31 +420,28 @@ const main = async () => {
                     }
 
                 } catch (e) {
-                    if (e.message.includes('detached Frame') || e.message.includes('closed') || e.message.includes('Protocol error')) {
-                        logger.error(`🔴 Frame detached: ${e.message}`);
-                        throw e; // Break loop to reconnect
+                    if (e.message.includes('detached') || e.message.includes('closed')) {
+                        logger.error(`🔴 Frame error: ${e.message}`);
+                        throw e;
                     } else {
-                        logger.error(`🔴 Unexpected error in monitoring loop: ${e.message}`);
-                        await new Promise(resolve => setTimeout(resolve, 15000));
+                        logger.error(`🔴 Loop error: ${e.message}`);
+                        await new Promise(r => setTimeout(r, 15000));
                     }
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                await new Promise(r => setTimeout(r, 2000));
             }
 
         } catch (e) {
             logger.error(`🔴 Monitoring error: ${e.message}`);
             return false;
         }
-        return true;
     };
     
     const reconnect = async () => {
-        logger.info("🔄 Attempting to reconnect...");
+        logger.info("🔄 Reconnecting...");
         if (browser) {
-            try {
-                await browser.close();
-            } catch (e) {}
+            try { await browser.close(); } catch (e) {}
             browser = null;
         }
         
@@ -468,11 +455,7 @@ const main = async () => {
         await startMonitoring();
     };
     
-    // Start monitoring
     await startMonitoring();
 };
 
-// ============================================
-// প্রোগ্রাম শুরু
-// ============================================
 main();
