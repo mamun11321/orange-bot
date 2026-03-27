@@ -83,24 +83,24 @@ const sendAudioToTelegramGroup = async (caption, filePath) => {
     }
 };
 
+// ============================================
+// লগইন ফাংশন (আপনার দেওয়া আপডেটেড ভার্সন)
+// ============================================
 const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
     let browser = null;
     let attempt = 0;
 
-    // Random User Agents list (বিভিন্ন ব্রাউজার থেকে)
     const userAgents = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
 
     while (attempt < maxRetries) {
         try {
-            // Random User Agent নির্বাচন (প্রতি চেষ্টায় ভিন্ন ব্রাউজার)
             const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
             
-            logger.info(`🌐 Launching browser with User Agent: ${randomUserAgent.substring(0, 50)}...`);
+            logger.info(`🚀 Launching browser with User Agent: ${randomUserAgent.substring(0, 50)}...`);
             
             browser = await puppeteer.launch({
                 headless,
@@ -112,212 +112,125 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                     "--disable-accelerated-2d-canvas",
                     "--disable-gpu",
                     "--disable-web-security",
-                    "--disable-features=IsolateOrigins,site-per-process",
                     "--window-size=1366,768"
-                ]
+                ],
+                protocolTimeout: 120000
             });
 
             const page = await browser.newPage();
             
-            // Set random User Agent
             await page.setUserAgent(randomUserAgent);
             
-            // Set extra headers to look like real browser
             await page.setExtraHTTPHeaders({
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
+                'Connection': 'keep-alive'
             });
             
-            // Set timeout
             page.setDefaultTimeout(90000);
             
             logger.info("🌐 Opening login page...");
             await page.goto("https://www.orangecarrier.com/login", {
-                waitUntil: "domcontentloaded",
+                waitUntil: "networkidle2",
                 timeout: 60000,
             });
             
-            // Wait for page to fully load
-            await page.waitForSelector("body", { timeout: 30000 });
+            await page.waitForSelector('input[type="email"], input[name="email"], input[type="text"]', { timeout: 30000 });
+            await new Promise(r => setTimeout(r, 2000));
             
-            // Random delay (1-3 seconds) to mimic human behavior
-            await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
+            logger.info("🔍 Searching for login form...");
             
-            logger.info("⏳ Searching for login form...");
-            
-            // Find email field
-            let emailField = null;
-            let passField = null;
-            
-            // Try all input fields
-            const inputs = await page.$$("input");
-            logger.info(`Found ${inputs.length} input fields`);
-            
-            for (let i = 0; i < inputs.length; i++) {
-                const input = inputs[i];
-                const type = await input.evaluate(el => el.getAttribute("type") || "");
-                const name = await input.evaluate(el => el.getAttribute("name") || "");
-                const id = await input.evaluate(el => el.getAttribute("id") || "");
-                const placeholder = await input.evaluate(el => el.getAttribute("placeholder") || "");
-                const className = await input.evaluate(el => el.getAttribute("class") || "");
-                
-                logger.info(`Input ${i}: type=${type}, name=${name}, id=${id}`);
-                
-                // Email/Username field detection
-                if (!emailField && (
-                    type === "email" || 
-                    type === "text" || 
-                    name.toLowerCase().includes("email") || 
-                    name.toLowerCase().includes("user") ||
-                    id.toLowerCase().includes("email") || 
-                    id.toLowerCase().includes("user") ||
-                    placeholder.toLowerCase().includes("email") ||
-                    placeholder.toLowerCase().includes("user")
-                )) {
-                    emailField = input;
-                    logger.info(`✅ Found email/username field: ${name || id || placeholder}`);
-                }
-                
-                // Password field detection
-                if (!passField && (
-                    type === "password" ||
-                    name.toLowerCase().includes("password") ||
-                    id.toLowerCase().includes("password") ||
-                    placeholder.toLowerCase().includes("password")
-                )) {
-                    passField = input;
-                    logger.info(`✅ Found password field: ${name || id || placeholder}`);
-                }
-            }
-            
-            // If still not found, try last resort
-            if (!emailField || !passField) {
-                const allInputs = await page.$$("input");
-                for (const input of allInputs) {
-                    const type = await input.evaluate(el => el.getAttribute("type"));
-                    if (!emailField && (type === "email" || type === "text")) {
+            let emailField = await page.$('input[type="email"], input[name="email"], input[placeholder*="Email"]');
+            if (!emailField) {
+                const inputs = await page.$$('input');
+                for (const input of inputs) {
+                    const type = await input.evaluate(el => el.type);
+                    const name = await input.evaluate(el => el.name);
+                    if (type === 'text' && name === 'email') {
                         emailField = input;
-                    }
-                    if (!passField && type === "password") {
-                        passField = input;
+                        break;
                     }
                 }
             }
-
-            if (emailField && passField) {
-                logger.info("✅ Email & Password fields detected!");
-                
-                // Clear fields first
-                await emailField.click({ clickCount: 3 });
-                await emailField.press('Backspace');
-                
-                // Type email like human (with delay)
-                logger.info("✍️ Typing username...");
-                for (const char of USERNAME) {
-                    await emailField.type(char, { delay: Math.random() * 100 + 50 });
-                }
-                
-                // Random delay between fields
-                await new Promise(r => setTimeout(r, Math.random() * 500 + 300));
-                
-                // Clear and type password
-                await passField.click({ clickCount: 3 });
-                await passField.press('Backspace');
-                
-                logger.info("✍️ Typing password...");
-                for (const char of PASSWORD) {
-                    await passField.type(char, { delay: Math.random() * 100 + 50 });
-                }
-                
-                // Random delay before clicking
-                await new Promise(r => setTimeout(r, Math.random() * 500 + 500));
-                
-            } else {
-                logger.error("❌ Could not detect login form fields");
-                throw new Error("Could not detect email or password field!");
-            }
-
-            // Find and click login button
-            let loginBtn = null;
             
-            // Try different button selectors
-            const buttonSelectors = [
-                'button[type="submit"]',
-                'input[type="submit"]',
-                'button:contains("Sign In")',
-                'button:contains("Login")',
-                'button:contains("Signin")'
-            ];
+            let passField = await page.$('input[type="password"]');
             
-            for (const selector of buttonSelectors) {
-                if (selector.includes('contains')) {
-                    const btns = await page.$$('button');
-                    for (const btn of btns) {
-                        const text = await btn.evaluate(el => el.innerText);
-                        if (text && (text.includes("Sign In") || text.includes("Login") || text.includes("Signin"))) {
-                            loginBtn = btn;
-                            break;
-                        }
-                    }
-                } else {
-                    loginBtn = await page.$(selector);
-                }
-                if (loginBtn) break;
+            if (!emailField || !passField) {
+                throw new Error("Login form fields not found!");
             }
-
+            
+            logger.info("✅ Email & Password fields detected!");
+            
+            await emailField.click({ clickCount: 3 });
+            await emailField.press('Backspace');
+            for (const char of USERNAME) {
+                await emailField.type(char, { delay: 50 + Math.random() * 50 });
+            }
+            
+            await new Promise(r => setTimeout(r, 500));
+            
+            await passField.click({ clickCount: 3 });
+            await passField.press('Backspace');
+            for (const char of PASSWORD) {
+                await passField.type(char, { delay: 50 + Math.random() * 50 });
+            }
+            
+            await new Promise(r => setTimeout(r, 1000));
+            
+            let loginBtn = await page.$('button[type="submit"]');
+            if (!loginBtn) loginBtn = await page.$('input[type="submit"]');
+            
             if (loginBtn) {
                 logger.info("👉 Clicking Sign In button...");
                 await loginBtn.click();
             } else {
-                logger.info("No login button found, pressing Enter key...");
+                logger.info("⏎ Pressing Enter key...");
                 await passField.press('Enter');
             }
             
-            // Wait for navigation
+            logger.info("⏳ Waiting for redirect...");
+            
+            await page.waitForFunction(
+                () => !window.location.href.includes('/login'),
+                { timeout: 30000 }
+            ).catch(() => {
+                logger.warning("URL didn't change, checking content...");
+            });
+            
             await new Promise(r => setTimeout(r, 5000));
             
             const currentUrl = page.url();
-            logger.info(`📍 Current URL after login: ${currentUrl}`);
+            logger.info(`📍 Current URL: ${currentUrl}`);
             
-            // Check if login successful
-            if (!currentUrl.includes("login") && currentUrl.includes("orangecarrier.com")) {
-                const pageContent = await page.content();
-                if (pageContent.includes("Dashboard") || 
-                    pageContent.includes("Account Code") || 
-                    pageContent.includes("Live Calls") || 
-                    pageContent.includes("logout") ||
-                    pageContent.includes("Welcome")) {
-                    
-                    logger.info("🎉 Login successful! Dashboard detected.");
-                    
-                    // Take screenshot for verification
-                    await page.screenshot({ path: 'dashboard.png' }).catch(() => {});
-                    
-                    const liveCallsUrl = "https://www.orangecarrier.com/live/calls";
-                    await page.goto(liveCallsUrl, { waitUntil: "networkidle2", timeout: 30000 });
-                    const cookies = await page.cookies();
-                    
-                    logger.info(`✅ Session established with ${cookies.length} cookies`);
-                    
-                    return { browser, page, cookies };
-                }
+            const pageContent = await page.content();
+            
+            if (pageContent.includes('Dashboard') || 
+                pageContent.includes('Live Calls') ||
+                pageContent.includes('Account Code') ||
+                pageContent.includes('logout')) {
+                
+                logger.info("🎉 Login successful! Dashboard detected.");
+                
+                await page.goto('https://www.orangecarrier.com/live/calls', { 
+                    waitUntil: 'networkidle2', 
+                    timeout: 30000 
+                });
+                
+                const cookies = await page.cookies();
+                logger.info(`🍪 Got ${cookies.length} cookies`);
+                
+                return { browser, page, cookies };
             }
             
-            // Check if still on login page
-            if (currentUrl.includes("login")) {
-                const pageContent = await page.content();
-                if (pageContent.includes("invalid") || pageContent.includes("Incorrect") || pageContent.includes("error")) {
-                    logger.error("❌ Login failed: Invalid credentials");
-                } else {
-                    logger.error("❌ Login failed: Still on login page");
+            if (currentUrl.includes('login')) {
+                const errorMsg = await page.$eval('.error, .alert, .invalid-feedback', el => el.innerText).catch(() => null);
+                if (errorMsg) {
+                    logger.error(`❌ Login error: ${errorMsg}`);
                 }
-                throw new Error("Login failed - still on login page");
+                throw new Error("Still on login page - login failed");
             }
             
-            throw new Error("Login failed or dashboard not detected.");
+            throw new Error("Login failed - unknown reason");
             
         } catch (err) {
             attempt++;
@@ -333,14 +246,16 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                 return null;
             }
             
-            const waitTime = 8000;
-            logger.info(`🔄 Retrying login in ${waitTime/1000} seconds...`);
-            await new Promise(r => setTimeout(r, waitTime));
+            logger.info(`🔄 Retrying in 10 seconds...`);
+            await new Promise(r => setTimeout(r, 10000));
         }
     }
     return null;
 };
 
+// ============================================
+// কল প্রসেসিং ফাংশন
+// ============================================
 const processCallWorker = async (callData, cookies, page) => {
     const { country, number, cliNumber, audioUrl } = callData;
 
@@ -392,6 +307,9 @@ const processCallWorker = async (callData, cookies, page) => {
     }
 };
 
+// ============================================
+// মেইন ফাংশন
+// ============================================
 const main = async () => {
     let browser = null;
     try {
@@ -476,4 +394,7 @@ const main = async () => {
     }
 };
 
+// ============================================
+// প্রোগ্রাম শুরু
+// ============================================
 main();
