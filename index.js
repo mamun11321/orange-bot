@@ -83,7 +83,7 @@ const sendAudioToTelegramGroup = async (caption, filePath) => {
     }
 };
 
-const loginToDashboard = async ({ headless = true, maxRetries = 2 } = {}) => {
+const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
     let browser = null;
     let attempt = 0;
 
@@ -102,50 +102,89 @@ const loginToDashboard = async ({ headless = true, maxRetries = 2 } = {}) => {
             });
 
             const page = await browser.newPage();
-
+            
+            // Set timeout
+            page.setDefaultTimeout(60000);
+            
             logger.info("🌐 Opening login page...");
             await page.goto("https://www.orangecarrier.com/login", {
-                waitUntil: "networkidle2",
+                waitUntil: "domcontentloaded",
                 timeout: 60000,
             });
+            
+            // Extra wait for dynamic content
+            await page.waitForSelector("input, form", { timeout: 30000 }).catch(() => {});
+            
+            logger.info("⏳ Waiting for form to load...");
+            await new Promise(r => setTimeout(r, 3000));
 
-            logger.info("⏳ Waiting 5 sec before scanning form...");
-            await new Promise(r => setTimeout(r, 5000));
-
-            const inputs = await page.$$("input");
-            let emailField = null, passField = null;
-
-            for (const input of inputs) {
-                const attrs = await input.evaluate(el => ({
-                    type: el.getAttribute("type"),
-                    placeholder: el.getAttribute("placeholder"),
-                    name: el.getAttribute("name"),
-                    id: el.getAttribute("id"),
-                }));
-
-                if (!emailField && (attrs.type === "email" ||
-                    (attrs.placeholder && attrs.placeholder.toLowerCase().includes("email")) ||
-                    (attrs.name && attrs.name.toLowerCase().includes("email")) ||
-                    (attrs.id && attrs.id.toLowerCase().includes("email")))) {
-                    emailField = input;
-                }
-                if (!passField && attrs.type === "password") {
-                    passField = input;
+            // Try multiple selectors for email field
+            let emailField = null;
+            let passField = null;
+            
+            // Try different selectors
+            const emailSelectors = [
+                'input[type="email"]',
+                'input[name="email"]',
+                'input[name="username"]',
+                'input[id*="email"]',
+                'input[placeholder*="Email"]',
+                'input[placeholder*="email"]'
+            ];
+            
+            const passSelectors = [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[id*="password"]',
+                'input[placeholder*="Password"]',
+                'input[placeholder*="password"]'
+            ];
+            
+            for (const selector of emailSelectors) {
+                emailField = await page.$(selector);
+                if (emailField) break;
+            }
+            
+            for (const selector of passSelectors) {
+                passField = await page.$(selector);
+                if (passField) break;
+            }
+            
+            // If still not found, try generic approach
+            if (!emailField || !passField) {
+                const inputs = await page.$$("input");
+                for (const input of inputs) {
+                    const type = await input.evaluate(el => el.getAttribute("type"));
+                    if (!emailField && (type === "email" || type === "text")) {
+                        emailField = input;
+                    }
+                    if (!passField && type === "password") {
+                        passField = input;
+                    }
                 }
             }
 
             if (emailField && passField) {
                 logger.info("✅ Email & Password fields detected! Auto filling...");
-                await emailField.type(USERNAME, { delay: 100 });
-                await passField.type(PASSWORD, { delay: 100 });
+                await emailField.type(USERNAME, { delay: 50 });
+                await passField.type(PASSWORD, { delay: 50 });
             } else {
+                logger.error("❌ Could not detect login form fields");
                 throw new Error("Could not detect email or password field!");
             }
 
-            let loginBtn = await page.$("button[type=submit], input[type=submit]");
+            // Try to find login button
+            let loginBtn = await page.$("button[type=submit]");
+            if (!loginBtn) loginBtn = await page.$("input[type=submit]");
             if (!loginBtn) {
-                const signInBtns = await page.$x("//button[contains(., 'Sign In')]");
-                if (signInBtns.length > 0) loginBtn = signInBtns[0];
+                const btns = await page.$$("button");
+                for (const btn of btns) {
+                    const text = await btn.evaluate(el => el.innerText);
+                    if (text && (text.includes("Sign In") || text.includes("Login") || text.includes("Signin"))) {
+                        loginBtn = btn;
+                        break;
+                    }
+                }
             }
 
             if (loginBtn) {
@@ -158,10 +197,15 @@ const loginToDashboard = async ({ headless = true, maxRetries = 2 } = {}) => {
                 throw new Error("Sign In button not found!");
             }
 
+            // Wait for redirect
+            await new Promise(r => setTimeout(r, 3000));
+            
             const currentUrl = page.url();
-            if (currentUrl.includes("orangecarrier.com")) {
+            logger.info(`📍 Current URL: ${currentUrl}`);
+            
+            if (currentUrl.includes("orangecarrier.com") && !currentUrl.includes("login")) {
                 const pageContent = await page.content();
-                if (pageContent.includes("Dashboard") || pageContent.includes("Account Code")) {
+                if (pageContent.includes("Dashboard") || pageContent.includes("Account Code") || pageContent.includes("Live Calls")) {
                     logger.info("🎉 Login successful! Dashboard detected.");
 
                     const liveCallsUrl = "https://www.orangecarrier.com/live/calls";
@@ -321,4 +365,4 @@ const main = async () => {
     }
 };
 
-main(); 
+main();
