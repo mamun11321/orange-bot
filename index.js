@@ -84,23 +84,51 @@ const sendAudioToTelegramGroup = async (caption, filePath) => {
 };
 
 // ============================================
-// লগইন ফাংশন (আপনার দেওয়া আপডেটেড ভার্সন)
+// স্লো টাইপিং ফাংশন (হিউম্যান-লাইক)
+// ============================================
+const slowType = async (element, text, page) => {
+    for (const char of text) {
+        await element.type(char, { delay: Math.random() * 200 + 150 }); // 150-350ms delay
+    }
+};
+
+// ============================================
+// পপ-আপ ক্লোজ ফাংশন
+// ============================================
+const closePopups = async (page) => {
+    const popupTexts = ['Next', 'Done', 'Close', 'Skip', 'Got it'];
+    for (const text of popupTexts) {
+        try {
+            const btn = await page.$x(`//button[contains(text(), '${text}')]`);
+            if (btn.length > 0) {
+                await btn[0].click();
+                logger.info(`✅ Closed popup: ${text}`);
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+};
+
+// ============================================
+// লগইন ফাংশন (Python স্ক্রিপ্ট থেকে কনভার্ট)
 // ============================================
 const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
     let browser = null;
     let attempt = 0;
 
     const userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ];
 
     while (attempt < maxRetries) {
         try {
             const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
             
-            logger.info(`🚀 Launching browser with User Agent: ${randomUserAgent.substring(0, 50)}...`);
+            logger.info(`🚀 Launching browser (headless: ${headless})...`);
             
             browser = await puppeteer.launch({
                 headless,
@@ -112,14 +140,21 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                     "--disable-accelerated-2d-canvas",
                     "--disable-gpu",
                     "--disable-web-security",
-                    "--window-size=1366,768"
+                    "--window-size=1366,768",
+                    "--disable-blink-features=AutomationControlled"
                 ],
                 protocolTimeout: 120000
             });
 
             const page = await browser.newPage();
             
+            // Set user agent
             await page.setUserAgent(randomUserAgent);
+            
+            // Remove webdriver detection
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
             
             await page.setExtraHTTPHeaders({
                 'Accept-Language': 'en-US,en;q=0.9',
@@ -129,30 +164,46 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
             
             page.setDefaultTimeout(90000);
             
+            // Enable network logging for audio capture
+            await page.setRequestInterception(true);
+            const capturedAudioUrls = new Set();
+            
+            page.on('request', request => {
+                const url = request.url();
+                if (url.includes('.mp3') || url.includes('sound') || url.includes('audio')) {
+                    logger.info(`🎵 Audio request detected: ${url.substring(0, 100)}`);
+                    capturedAudioUrls.add(url);
+                }
+                request.continue();
+            });
+            
             logger.info("🌐 Opening login page...");
             await page.goto("https://www.orangecarrier.com/login", {
                 waitUntil: "networkidle2",
                 timeout: 60000,
             });
             
-            await page.waitForSelector('input[type="email"], input[name="email"], input[type="text"]', { timeout: 30000 });
+            // Wait for form
+            await page.waitForSelector('input[type="email"], input[name="email"]', { timeout: 30000 });
             await new Promise(r => setTimeout(r, 2000));
             
-            logger.info("🔍 Searching for login form...");
+            logger.info("🔍 Finding login form...");
             
-            let emailField = await page.$('input[type="email"], input[name="email"], input[placeholder*="Email"]');
+            // Find email field
+            let emailField = await page.$('input[type="email"], input[name="email"]');
             if (!emailField) {
                 const inputs = await page.$$('input');
                 for (const input of inputs) {
                     const type = await input.evaluate(el => el.type);
                     const name = await input.evaluate(el => el.name);
-                    if (type === 'text' && name === 'email') {
+                    if ((type === 'text' || type === 'email') && name === 'email') {
                         emailField = input;
                         break;
                     }
                 }
             }
             
+            // Find password field
             let passField = await page.$('input[type="password"]');
             
             if (!emailField || !passField) {
@@ -161,22 +212,27 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
             
             logger.info("✅ Email & Password fields detected!");
             
+            // Clear and type email (slow typing like Python script)
             await emailField.click({ clickCount: 3 });
             await emailField.press('Backspace');
+            logger.info("✍️ Typing username (human-like)...");
             for (const char of USERNAME) {
-                await emailField.type(char, { delay: 50 + Math.random() * 50 });
-            }
-            
-            await new Promise(r => setTimeout(r, 500));
-            
-            await passField.click({ clickCount: 3 });
-            await passField.press('Backspace');
-            for (const char of PASSWORD) {
-                await passField.type(char, { delay: 50 + Math.random() * 50 });
+                await emailField.type(char, { delay: Math.random() * 150 + 100 });
             }
             
             await new Promise(r => setTimeout(r, 1000));
             
+            // Clear and type password
+            await passField.click({ clickCount: 3 });
+            await passField.press('Backspace');
+            logger.info("✍️ Typing password (human-like)...");
+            for (const char of PASSWORD) {
+                await passField.type(char, { delay: Math.random() * 150 + 100 });
+            }
+            
+            await new Promise(r => setTimeout(r, 1000));
+            
+            // Find and click login button
             let loginBtn = await page.$('button[type="submit"]');
             if (!loginBtn) loginBtn = await page.$('input[type="submit"]');
             
@@ -188,49 +244,42 @@ const loginToDashboard = async ({ headless = true, maxRetries = 3 } = {}) => {
                 await passField.press('Enter');
             }
             
-            logger.info("⏳ Waiting for redirect...");
+            // Wait for login to complete
+            logger.info("⏳ Waiting for login to complete...");
+            await new Promise(r => setTimeout(r, 10000));
             
-            await page.waitForFunction(
-                () => !window.location.href.includes('/login'),
-                { timeout: 30000 }
-            ).catch(() => {
-                logger.warning("URL didn't change, checking content...");
+            // Go directly to live calls page (like Python script)
+            logger.info("🌐 Navigating to live calls page...");
+            await page.goto('https://www.orangecarrier.com/live/calls', {
+                waitUntil: 'networkidle2',
+                timeout: 30000
             });
             
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 3000));
+            
+            // Close popups (Next, Done, etc.)
+            logger.info("🔍 Checking for popups...");
+            await closePopups(page);
             
             const currentUrl = page.url();
             logger.info(`📍 Current URL: ${currentUrl}`);
             
+            // Check if login successful
             const pageContent = await page.content();
             
-            if (pageContent.includes('Dashboard') || 
-                pageContent.includes('Live Calls') ||
-                pageContent.includes('Account Code') ||
-                pageContent.includes('logout')) {
+            if (pageContent.includes('Live Calls') || 
+                pageContent.includes('Dashboard') ||
+                currentUrl.includes('live/calls')) {
                 
                 logger.info("🎉 Login successful! Dashboard detected.");
-                
-                await page.goto('https://www.orangecarrier.com/live/calls', { 
-                    waitUntil: 'networkidle2', 
-                    timeout: 30000 
-                });
                 
                 const cookies = await page.cookies();
                 logger.info(`🍪 Got ${cookies.length} cookies`);
                 
-                return { browser, page, cookies };
+                return { browser, page, cookies, capturedAudioUrls };
             }
             
-            if (currentUrl.includes('login')) {
-                const errorMsg = await page.$eval('.error, .alert, .invalid-feedback', el => el.innerText).catch(() => null);
-                if (errorMsg) {
-                    logger.error(`❌ Login error: ${errorMsg}`);
-                }
-                throw new Error("Still on login page - login failed");
-            }
-            
-            throw new Error("Login failed - unknown reason");
+            throw new Error("Login failed - not on live calls page");
             
         } catch (err) {
             attempt++;
@@ -326,49 +375,65 @@ const main = async () => {
         const processedCalls = new Set();
         logger.info("\n🚀 Monitoring started...");
 
+        // Refresh interval
         setInterval(async () => {
             logger.info(`🕒 ${REFRESH_INTERVAL_MINUTES} minutes passed. Refreshing page...`);
             try {
                 await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+                await closePopups(page);
                 logger.info("✅ Page refreshed successfully.");
             } catch (e) {
                 logger.error(`🔴 Page refresh failed: ${e.message}`);
             }
         }, REFRESH_INTERVAL_MINUTES * 60 * 1000);
 
+        // Main monitoring loop
         while (true) {
             try {
                 const pageHtml = await page.content();
                 const $ = cheerio.load(pageHtml);
 
-                $('#LiveCalls tr, #last-activity tbody.lastdata tr').each((i, row) => {
+                // Find table rows
+                const rows = $('#LiveCalls tr, #last-activity tbody.lastdata tr, table tbody tr');
+                
+                rows.each((i, row) => {
                     const columns = $(row).find('td');
                     if (columns.length > 2) {
                         const cliNumber = $(columns[2]).text().trim();
-
-                        const playButton = $(row).find("button[onclick*='Play']");
-                        if (playButton.length) {
-                            const onclickAttr = playButton.attr('onclick');
-                            const matches = onclickAttr.match(/Play\(['"]([^'"]+)['"],\s*['"]([^'"]+)['"]\)/);
-                            if (matches) {
-                                const [, did, uuid] = matches;
-                                const callId = `${cliNumber}_${uuid}`;
-
-                                if (!processedCalls.has(callId)) {
-                                    processedCalls.add(callId);
-
+                        
+                        if (cliNumber && /^\d+$/.test(cliNumber) && !processedCalls.has(cliNumber)) {
+                            processedCalls.add(cliNumber);
+                            
+                            // Send Telegram notification
+                            const msg = `📞 <b>New Call Detected:</b>\n🔢 Number: <code>${cliNumber}</code>\n⏳ Playing audio in 20 seconds...`;
+                            
+                            const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+                            axios.post(url, {
+                                chat_id: CHAT_ID,
+                                text: msg,
+                                parse_mode: 'HTML'
+                            }).catch(() => {});
+                            
+                            logger.info(`📞 New call detected (${cliNumber}), scheduling playback after 20s...`);
+                            
+                            // Find and click play button
+                            const playButton = $(row).find("button[onclick*='Play']");
+                            if (playButton.length) {
+                                const onclickAttr = playButton.attr('onclick');
+                                const matches = onclickAttr.match(/Play\(['"]([^'"]+)['"],\s*['"]([^'"]+)['"]\)/);
+                                if (matches) {
+                                    const [, did, uuid] = matches;
+                                    
                                     const callData = {
                                         country: extractCountryFromTermination($(columns[0]).text().trim()),
                                         number: $(columns[1]).text().trim(),
                                         cliNumber: cliNumber,
                                         audioUrl: `https://www.orangecarrier.com/live/calls/sound?did=${did}&uuid=${uuid}`
                                     };
-
-                                    logger.info(`📞 New call detected (${cliNumber}), scheduling playback after 20s...`);
-
+                                    
                                     setTimeout(() => {
                                         processCallWorker(callData, cookies, page)
-                                            .catch(err => logger.error(`❌ Call processing failed for ${cliNumber}: ${err.message}`));
+                                            .catch(err => logger.error(`❌ Call processing failed: ${err.message}`));
                                     }, 20000);
                                 }
                             }
@@ -381,7 +446,7 @@ const main = async () => {
                 await new Promise(resolve => setTimeout(resolve, 15000));
             }
 
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay like Python script
         }
 
     } catch (e) {
@@ -394,7 +459,4 @@ const main = async () => {
     }
 };
 
-// ============================================
-// প্রোগ্রাম শুরু
-// ============================================
 main();
